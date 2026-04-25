@@ -23,10 +23,7 @@ jobs:
       - name: Get Jellyfin version from Alpine apk
         id: jellyfin_version
         run: |
-          VERSION=$(docker run --rm alpine:edge sh -c \
-            "echo https://dl-cdn.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && \
-             apk update -q && \
-             apk search --exact jellyfin" | awk -F- {print })
+          VERSION=$(docker run --rm alpine:edge sh -c "echo https://dl-cdn.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && apk update -q && apk search --exact jellyfin" | awk -F- {print })
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Jellyfin version: $VERSION"
 
