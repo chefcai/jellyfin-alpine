@@ -26,7 +26,7 @@ jobs:
           VERSION=$(docker run --rm alpine:edge sh -c \
             "echo https://dl-cdn.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && \
              apk update -q && \
-             apk info --available jellyfin 2>/dev/null | grep -oP [0-9]+.[0-9]+.[0-9]+ | head -1")
+             apk search --exact jellyfin" | awk -F- {print })
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Jellyfin version: $VERSION"
 
