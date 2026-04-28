@@ -26,6 +26,11 @@ services:
       - ./config:/config
       - ./cache:/cache
       - /mnt/media:/media:ro
+    # Hardware acceleration on Intel iGPU hosts (VA-API / QSV):
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "<host render gid>"   # e.g. 107 on Debian/Ubuntu, find with: getent group render
     restart: unless-stopped
 ```
 
@@ -39,14 +44,39 @@ Installed via `apk` from Alpine edge community:
 - `icu-data-full`
 - `tzdata`
 - `libva-utils`
+- `intel-media-driver` — iHD VA-API driver, preferred for Intel Gen 9+ iGPUs
+- `libva-intel-driver` — i965 VA-API driver, fallback for older / mixed paths
 - `dbus`
+
+To verify hardware acceleration is wired up at runtime:
+
+```
+docker exec jellyfin vainfo
+```
+
+You should see `VAEntrypointVLD` (decode) and `VAEntrypointEncSlice` (encode) entrypoints listed for H264 and HEVC.
 
 ## Build
 
-The image is built automatically on every push to `main` via GitHub Actions and pushed to the GitHub Container Registry (`ghcr.io`).
+Builds run in GitHub Actions (`.github/workflows/build.yml`) and push to GHCR (`ghcr.io/chefcai/jellyfin-alpine`). **Local `docker build` is not part of the workflow** — edit the Dockerfile, commit, push, let CI build, then pull.
+
+### Branch / tag → image tag mapping
+
+Driven by `docker/metadata-action@v5`:
+
+| Trigger                      | Image tags pushed                                              |
+| ---------------------------- | -------------------------------------------------------------- |
+| push to `main`               | `:latest`, `:<jellyfin-version>`, `:main-<sha>`                |
+| push to any other branch     | `:<slugified-branch>` (e.g. `:hw-encode`), `:<branch>-<sha>`   |
+| git tag `vX.Y.Z`             | `:vX.Y.Z`                                                      |
+| pull request                 | `:pr-<num>`                                                    |
+| schedule (daily 06:15 UTC)   | rebuild on `main` if upstream Jellyfin published a new version |
+
+The `:<branch>-<sha>` tag is always pushed and gives an immutable pin for rollback.
 
 ## Notes
 
-- Runs as a dedicated `jellyfin` user (uid `13001`, gid `13000`)
-- Jellyfin version is determined by whatever Alpine edge community provides at build time
-- Port `8096` is exposed by default
+- Runs as a dedicated `jellyfin` user (uid `13001`, gid `13000`).
+- Jellyfin version is determined by whatever Alpine edge community provides at build time.
+- Port `8096` is exposed by default.
+- VA-API drivers are present in the image, but the host must still pass `/dev/dri` and the appropriate `render` GID into the container — see the Usage example above.
