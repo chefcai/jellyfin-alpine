@@ -32,10 +32,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get Jellyfin version from Alpine apk
+      - name: Get Jellyfin version from upstream image
         id: jellyfin_version
         run: |
-          VERSION=$(docker run --rm alpine:edge sh -c "echo https://dl-cdn.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && apk update -q && apk search --exact jellyfin" | cut -d- -f2)
+          # Track upstream jellyfin/jellyfin:latest (BRAIN-37: base flipped
+          # from Alpine to Debian for gen-9 QSV support). Read the
+          # org.opencontainers.image.version label as the canonical Jellyfin
+          # version for the :<jellyfin-version> tag on main.
+          docker pull jellyfin/jellyfin:latest >/dev/null
+          VERSION=$(docker inspect jellyfin/jellyfin:latest \
+            --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+          if [ -z "$VERSION" ] || [ "$VERSION" = "<no value>" ]; then VERSION=unknown; fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Jellyfin version: $VERSION"
 

@@ -1,45 +1,41 @@
-# Dockerfile.jellyfin-test
-FROM alpine:edge
-
-# Enable community repository for Jellyfin and Intel VA-API drivers
-RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
-
-RUN addgroup -g 13000 jellyfin && adduser -D -u 13001 -G jellyfin jellyfin
-
-# Install jellyfin and common dependencies.
+# chefcai/jellyfin-alpine — Dockerfile
 #
-# VA-API hardware acceleration:
-#   * intel-media-driver  -> iHD driver, preferred for Gen 9+ Intel iGPUs
-#                            (Apollo/Gemini Lake, Coffee Lake, Tiger Lake, ...)
-#   * libva-intel-driver  -> i965 driver, fallback for Gen 8 and below; also
-#                            kept on Gen 9 because some codepaths still resolve
-#                            i965 first depending on LIBVA_DRIVER_NAME hints.
-#   * libva-utils         -> ships /usr/bin/vainfo for verification.
-RUN apk update && apk add --no-cache \
-    jellyfin \
-    jellyfin-web \
-    ffmpeg \
-    icu-data-full \
-    tzdata \
-    dotnet8-runtime \
-    libva-utils \
-    intel-media-driver \
-    libva-intel-driver \
-    dbus
+# The repo name keeps "alpine" for continuity, but the base flipped from
+# Alpine to Debian on 2026-04-28 (BRAIN-37). See ## Background.
+#
+# ## Background
+#
+# squirttle's iGPU is UHD 605 (Gemini Lake / Intel gen 9). For QSV at
+# runtime, gen 9 needs the *legacy* Intel Media SDK (libmfx /
+# libmfxhw64). Alpine edge only ships the modern oneVPL GPU runtime
+# (`onevpl-intel-gpu`, gen 11+) plus the `libvpl` dispatcher — there is
+# no `intel-mediasdk` / legacy `libmfx` package available. The previous
+# Alpine build had VA-API decode working via `intel-media-driver` (iHD)
+# but ffmpeg's QSV path failed at runtime with `MFX_ERR_UNSUPPORTED (-9)`
+# because no MediaSDK was dispatchable.
+#
+# The upstream `jellyfin/jellyfin` Debian image bundles `jellyfin-ffmpeg`
+# with both legacy `libmfxhw64.so` (gen 9) and modern `libmfx-gen.so` /
+# `libvpl.so.2` (gen 11+), plus `iHD_drv_video.so`, `i965_drv_video.so`
+# and `radeonsi_drv_video.so` in `/usr/lib/jellyfin-ffmpeg/lib/dri/`.
+# Verified working on Gemini Lake. Vendoring the legacy MediaSDK from
+# source on Alpine is fragile and ongoing work; switching base is the
+# proven path.
+FROM jellyfin/jellyfin:latest
 
-# Create volume mount points
-RUN mkdir -p /config /cache /media && \
-    chown -R jellyfin:jellyfin /config /cache /media /usr/share/webapps/jellyfin-web
+USER root
 
-# Set user
-USER jellyfin
+# `vainfo` on PATH for in-container VA-API verification. The upstream
+# image already ships `/usr/lib/jellyfin-ffmpeg/vainfo`, but BRAIN-25 /
+# BRAIN-37 verification scripts call `vainfo` directly.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends vainfo \
+ && rm -rf /var/lib/apt/lists/*
 
-# Expose default port
-EXPOSE 8096
-
-# Start Jellyfin server
-CMD ["jellyfin", \
-    "--datadir", "/config", \
-    "--cachedir", "/cache", \
-    "--ffmpeg", "/usr/bin/ffmpeg", \
-    "--webdir", "/usr/share/webapps/jellyfin-web"]
+# Inherit upstream ENTRYPOINT (/jellyfin/jellyfin), USER (root), CMD,
+# EXPOSE 8096, WORKDIR and volume hints unchanged. The previous Alpine
+# image ran as uid 13001 / gid 13000; the new image runs as root inside
+# the container (matching upstream conventions). Files in /config,
+# /cache and /media keep working under the existing host-side ownership
+# because root has access regardless. If we later want to drop
+# privileges, that's a follow-up — it's not required for QSV to work.
