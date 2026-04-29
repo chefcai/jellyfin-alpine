@@ -88,9 +88,6 @@ RUN apk update && apk add --no-cache \
     dotnet8-runtime \
     libva-utils \
     intel-media-driver \
-    libva-intel-driver \
-    mesa-va-gallium \
-    onevpl-intel-gpu \
     libvpl \
     intel-gmmlib \
     libstdc++ \
