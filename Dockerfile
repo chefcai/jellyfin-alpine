@@ -56,8 +56,15 @@ RUN cmake \
       .. && \
     make -j"$(nproc)" && \
     make install && \
-    echo "=== installed mediasdk files ===" && \
-    find /opt/mediasdk -maxdepth 4 -type f | head -50
+    strip --strip-unneeded /opt/mediasdk/lib/libmfxhw64.so.1.35 && \
+    strip --strip-unneeded /opt/mediasdk/lib/mfx/*.so && \
+    rm -f /opt/mediasdk/lib/libmfx.so /opt/mediasdk/lib/libmfx.so.1 \
+          /opt/mediasdk/lib/libmfx.so.1.35 && \
+    rm -rf /opt/mediasdk/include /opt/mediasdk/lib/pkgconfig \
+           /opt/mediasdk/share && \
+    echo "=== installed mediasdk files (post-strip) ===" && \
+    find /opt/mediasdk -type f -exec ls -la {} + && \
+    du -sh /opt/mediasdk
 
 # ============================================================================
 # Stage 2: runtime image.
