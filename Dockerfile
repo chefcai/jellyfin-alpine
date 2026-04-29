@@ -93,7 +93,6 @@ RUN apk update && apk add --no-cache \
     onevpl-intel-gpu \
     libvpl \
     intel-gmmlib \
-    intel-graphics-compiler \
     libstdc++ \
     libdrm \
     libva \
