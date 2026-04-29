@@ -6,6 +6,20 @@ A minimal, Alpine-based Docker image for [Jellyfin](https://jellyfin.org/) that 
 
 The official Jellyfin Docker image is based on Debian and carries a lot of weight. This image installs Jellyfin directly from the Alpine edge community repository using `apk`, resulting in a leaner image with a smaller attack surface.
 
+## Hardware encoding
+
+**Hardware encoding is disabled in this `:latest` image.** Transcoding runs on CPU. The image installs only `libva-utils` (for diagnostics) — no Intel iGPU drivers, no QSV runtime, no OpenCL.
+
+For Intel iGPU hardware acceleration (VA-API + QSV), use builds from the `alpine-hw-encode` branch:
+
+```
+ghcr.io/chefcai/jellyfin-alpine:alpine-hw-encode
+```
+
+That branch adds `intel-media-driver` (iHD VA-API driver), `libvpl` (QSV dispatcher), and a source-built MediaSDK 23.2.2 runtime so QSV dispatches on legacy Gen 9 (Apollo Lake / Gemini Lake) hardware. See the [alpine-hw-encode README](https://github.com/chefcai/jellyfin-alpine/blob/alpine-hw-encode/README.md) for setup, including the `/dev/dri` device mount and `render` group_add the host needs to provide.
+
+Note: HDR→SDR tonemapping is a separate concern from codec encoding and depends on the iGPU having enough OpenCL compute resources for the tonemap kernel. Gen 11+ Intel iGPUs (Tiger Lake / Alder Lake / N100-class) handle it fine; Gen 9 / Apollo Lake cannot — its 12 EUs run out of resources during the OpenCL kernel regardless of image. On Gen 9 you should keep `EnableTonemapping=false` and accept washed-out colors on HDR titles, or transcode HDR sources to SDR offline.
+
 ## Image
 
 ```
