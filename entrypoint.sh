@@ -57,9 +57,20 @@ chown "${PUID}:${PGID}" /cache/tmp 2>/dev/null || true
 # /dev/dri) -- su-exec's initgroups(3) call only picks up memberships
 # recorded in /etc/group, so make jellyfin a member of every group root
 # currently belongs to before dropping privileges.
+#
+# A `group_add`-injected GID (e.g. the host's "render" group) is very often
+# a host-only numeric GID with no matching name inside this image's own
+# /etc/group -- getent then returns nothing, and a name-only addgroup call
+# silently skips it, which drops the GPU render group entirely on privilege
+# drop. Create a local group entry for it when that happens, so jellyfin can
+# actually be made a member.
 for gid in $(id -G); do
   gname=$(getent group "$gid" | cut -d: -f1)
-  [ -n "$gname" ] && [ "$gname" != "jellyfin" ] && addgroup jellyfin "$gname" 2>/dev/null || true
+  if [ -z "$gname" ]; then
+    gname="hostgid${gid}"
+    addgroup -g "$gid" "$gname" 2>/dev/null || true
+  fi
+  [ "$gname" != "jellyfin" ] && addgroup jellyfin "$gname" 2>/dev/null || true
 done
 
 exec su-exec jellyfin "$@"
