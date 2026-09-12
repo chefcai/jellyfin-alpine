@@ -26,14 +26,31 @@ if [ "$PUID" != "$CUR_UID" ]; then
   sed -i "s/^jellyfin:x:[0-9]*:[0-9]*:/jellyfin:x:${PUID}:${PGID}:/" /etc/passwd
 fi
 
+# TMPDIR (see docker-compose's TMPDIR=/cache/tmp) is ephemeral scratch space
+# jellyfin/.NET recreate on every start. On a network-mounted /cache it can
+# accumulate stale named pipes/sockets left behind by a previous process's
+# lifetime (observed in production: leftover .NET diagnostic sockets from an
+# earlier container run), and removing/chowning those over NFS can fail with
+# "I/O error" on that specific path. Wipe it up front so leftover cruft from
+# a prior run can't linger.
+rm -rf /cache/tmp 2>/dev/null || true
+
 for dir in /config /cache; do
   if [ -d "$dir" ]; then
     owner="$(stat -c '%u:%g' "$dir" 2>/dev/null || echo '?')"
     if [ "$owner" != "${PUID}:${PGID}" ]; then
-      chown -R "${PUID}:${PGID}" "$dir"
+      # Best-effort: some network filesystems mishandle certain special
+      # files (sockets/FIFOs) under chown. A single unchownable leftover
+      # path used to abort this whole script under `set -e` and crash-loop
+      # the container -- don't let that happen; just report it.
+      chown -R "${PUID}:${PGID}" "$dir" \
+        || echo "[entrypoint] warning: chown of $dir hit at least one error (continuing)" >&2
     fi
   fi
 done
+
+mkdir -p /cache/tmp
+chown "${PUID}:${PGID}" /cache/tmp 2>/dev/null || true
 
 # Preserve access to any supplementary groups root has in this container
 # (e.g. a `group_add`-mounted GPU render group for hardware transcoding via
