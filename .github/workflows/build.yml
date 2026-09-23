@@ -114,7 +114,10 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: ${{ steps.meta.outputs.tags }}
+          # Fixed local-only tag, independent of steps.meta -- meta.outputs.tags
+          # can be empty on a pull_request event (no branch/tag ref to match),
+          # and an empty tag broke `docker run` in the smoke test below.
+          tags: jellyfin-alpine:ci-smoketest
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -123,7 +126,7 @@ jobs:
         if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
         run: |
           set -e
-          IMAGE="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          IMAGE="jellyfin-alpine:ci-smoketest"
           echo "Smoke testing $IMAGE"
 
           # jellyfin --version and jellyfin-ffmpeg -version both exit non-zero
