@@ -129,11 +129,11 @@ jobs:
           # jellyfin --version and jellyfin-ffmpeg -version both exit non-zero
           # on this build even though they print a valid version, so check the
           # printed output rather than the exit code.
-          VER_OUT="$(docker run --rm --entrypoint jellyfin "$IMAGE" --version || true)"
+          VER_OUT="$(docker run --rm --entrypoint jellyfin "$IMAGE" --version 2>&1 || true)"
           echo "$VER_OUT"
           echo "$VER_OUT" | grep -qiE '^Jellyfin' || { echo "::error::jellyfin --version did not report a Jellyfin version"; exit 1; }
 
-          FFMPEG_OUT="$(docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffmpeg "$IMAGE" -version || true)"
+          FFMPEG_OUT="$(docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffmpeg "$IMAGE" -version 2>&1 || true)"
           echo "$FFMPEG_OUT"
           echo "$FFMPEG_OUT" | grep -qi 'ffmpeg version' || { echo "::error::jellyfin-ffmpeg -version did not report a version"; exit 1; }
 
