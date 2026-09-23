@@ -8,7 +8,9 @@ on:
   workflow_dispatch:
   schedule:
     # Daily at 06:15 UTC (staggered 15 min after bazarr-alpine).
-    # Skips automatically if upstream version is already published.
+    # Skips automatically if upstream version is already published,
+    # unless it's the weekly forced-refresh day (see "Check if image
+    # already exists for this version" below).
     - cron: '15 6 * * *'
 
 env:
@@ -24,13 +26,25 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Get Jellyfin version from Alpine apk
         id: jellyfin_version
         run: |
           # Must match the FROM line in Dockerfile.
-          VERSION=$(docker run --rm alpine:3.24 sh -c "apk update -q && apk search --exact jellyfin" | cut -d- -f2)
+          VERSION=""
+          for attempt in 1 2 3; do
+            VERSION=$(docker run --rm alpine:3.24 sh -c "apk update -q && apk search --exact jellyfin" | cut -d- -f2)
+            if [ -n "$VERSION" ]; then
+              break
+            fi
+            echo "::warning::Version lookup attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not resolve Jellyfin version from Alpine apk after 3 attempts."
+            exit 1
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Jellyfin version: $VERSION"
 
@@ -38,32 +52,50 @@ jobs:
         id: check
         run: |
           VERSION="${{ steps.jellyfin_version.outputs.version }}"
-          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository }}:pull" | jq -r .token)
-          HTTP=$(curl -sSL -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.oci.image.index.v1+json" \
-            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "https://ghcr.io/v2/${{ github.repository }}/manifests/$VERSION")
-          if [ "$HTTP" = "200" ]; then
+
+          # Weekly forced refresh: even when $VERSION is already published,
+          # rebuild every Monday so Alpine/apk security fixes land without
+          # waiting on an upstream Jellyfin release (skip-if-published would
+          # otherwise never refresh the base layer).
+          FORCE_REFRESH=false
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%u)" = "1" ]; then
+            FORCE_REFRESH=true
+          fi
+
+          HTTP=""
+          for attempt in 1 2 3; do
+            TOKEN=$(curl -fsSL --retry 3 --retry-delay 5 "https://ghcr.io/token?scope=repository:${{ github.repository }}:pull" | jq -r .token)
+            HTTP=$(curl -sSL -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 5 --retry-connrefused \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${{ github.repository }}/manifests/$VERSION")
+            if [ -n "$HTTP" ]; then
+              break
+            fi
+            echo "::warning::Manifest check attempt $attempt got no response, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ "$HTTP" = "200" ] && [ "$FORCE_REFRESH" = "false" ]; then
             echo "needs_build=false" >> $GITHUB_OUTPUT
             echo "::notice::Version $VERSION already published — skipping build."
+          elif [ "$HTTP" = "200" ] && [ "$FORCE_REFRESH" = "true" ]; then
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "::notice::Version $VERSION already published, but forcing weekly base refresh."
           else
             echo "needs_build=true" >> $GITHUB_OUTPUT
             echo "::notice::Version $VERSION not yet published (HTTP $HTTP) — will build."
           fi
 
-      - name: Log in to GitHub Container Registry
+      - name: Set up Docker Buildx
         if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        uses: docker/setup-buildx-action@v4
 
       - name: Extract metadata for Docker
         if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Only the default branch publishes :latest and :<version>.
@@ -74,17 +106,52 @@ jobs:
             type=raw,value=${{ steps.jellyfin_version.outputs.version }},enable={{is_default_branch}}
             type=ref,event=branch,prefix=branch-,enable=${{ github.ref_name != 'main' }}
 
-      - name: Set up Docker Buildx
+      - name: Build image (local, for smoke test)
         if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test image
+        if: github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true'
+        run: |
+          set -e
+          IMAGE="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          echo "Smoke testing $IMAGE"
+
+          # jellyfin --version and jellyfin-ffmpeg -version both exit non-zero
+          # on this build even though they print a valid version, so check the
+          # printed output rather than the exit code.
+          VER_OUT="$(docker run --rm --entrypoint jellyfin "$IMAGE" --version || true)"
+          echo "$VER_OUT"
+          echo "$VER_OUT" | grep -qiE '^Jellyfin' || { echo "::error::jellyfin --version did not report a Jellyfin version"; exit 1; }
+
+          FFMPEG_OUT="$(docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffmpeg "$IMAGE" -version || true)"
+          echo "$FFMPEG_OUT"
+          echo "$FFMPEG_OUT" | grep -qi 'ffmpeg version' || { echo "::error::jellyfin-ffmpeg -version did not report a version"; exit 1; }
+
+      - name: Log in to GitHub Container Registry
+        if: (github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true') && github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        if: (github.event_name != 'schedule' || steps.check.outputs.needs_build == 'true') && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
